@@ -184,21 +184,43 @@ async function buildDashboardData() {
     result.errors.push("C: " + e.message);
   }
 
-  // BLOCK D
-  try {
-    const fr = await safeJson(`https://fapi.binance.com/fapi/v1/fundingRate?symbol=${SYMBOL}&limit=1000`);
-    const rates = fr.slice(-42).map((d) => +d.fundingRate);
-    const mean = rates.reduce((s, x) => s + x, 0) / rates.length;
-    const sd = Math.sqrt(rates.reduce((s, x) => s + (x - mean) ** 2, 0) / rates.length);
-    const z = sd ? ((rates.at(-1) - mean) / sd).toFixed(2) : "0.00";
-    const oiNow = await safeJson(`https://fapi.binance.com/fapi/v1/openInterest?symbol=${SYMBOL}`);
-    const oiHist = await safeJson(`https://api.binance.com/futures/data/openInterestHist?symbol=${SYMBOL}&period=1h&limit=24`);
-    const pct = (((+oiNow.openInterest - +oiHist[0].sumOpenInterest) / +oiHist[0].sumOpenInterest) * 100).toFixed(1);
-    result.dataD = { fundingZ: z, oiDelta24h: pct };
-  } catch (e) {
-    result.errors.push("D: " + e.message);
+// BLOCK D: Derivatives Positioning (fixed)
+try {
+  const fr = await safeJson(
+    `https://fapi.binance.com/fapi/v1/fundingRate?symbol=${SYMBOL}&limit=1000`
+  );
+  if (!Array.isArray(fr)) throw new Error("fundingRate not array");
+
+  // slice correct last n items
+  const rates = fr.slice(-42).map(d => +d.fundingRate);
+  const mean = rates.reduce((s,x) => s + x, 0) / rates.length;
+  const sd = Math.sqrt(rates.reduce((s,x) => s + (x - mean) ** 2, 0) / rates.length);
+  const fundingZ = sd ? ((rates.at(-1) - mean)/sd).toFixed(2) : "0.00";
+
+  const oiNow = await safeJson(
+    `https://fapi.binance.com/fapi/v1/openInterest?symbol=${SYMBOL}`
+  );
+  if (!oiNow.openInterest) throw new Error("openInterest missing");
+
+  const oiHistArr = await safeJson(
+    `https://fapi.binance.com/futures/data/openInterestHist?symbol=${SYMBOL}&period=1h&limit=24`
+  );
+  if (!Array.isArray(oiHistArr) || !oiHistArr[0]?.sumOpenInterest) {
+    throw new Error("oiHist shape unexpected");
   }
 
+  const pct24h = (((+oiNow.openInterest - +oiHistArr[0].sumOpenInterest) /
+                    +oiHistArr[0].sumOpenInterest) * 100).toFixed(1);
+
+  result.dataD = { fundingZ, oiDelta24h: pct24h };
+
+} catch (e) {
+  result.dataD = {
+    fundingZ: null,
+    oiDelta24h: null
+  };
+  result.errors.push(`D: ${e.message}`);
+}
   // BLOCK E
   try {
     const cg = await safeJson(`https://api.coingecko.com/api/v3/coins/bitcoin`);
