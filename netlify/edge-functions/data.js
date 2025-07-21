@@ -1,6 +1,6 @@
 // netlify/edge-functions/data.js
 export default async (request) => {
-  /* ──────────────  CORS pre-flight  ────────────── */
+  /* ─────────────  CORS pre-flight  ───────────── */
   if (request.method === 'OPTIONS') {
     return new Response(null, {
       status: 204,
@@ -13,16 +13,20 @@ export default async (request) => {
   }
 
   const SYMBOL = 'BTCUSDT';
-  const LIMIT  = 250;                       // rows for bloc A
+  const LIMIT  = 250;               // rows pulled for each kline set
 
   const result = {
-    dataA: {}, dataB: {}, dataC: {},
-    dataD: null, dataE: null, dataF: null,
+    dataA: {},          // trend & volatility
+    dataB: {},          // price-action
+    dataC: {},          // volume-flow
+    dataD: null,        // derivatives
+    dataE: null,        // sentiment
+    dataF: null,        // macro
     errors: []
   };
 
   /* ───────── resilient JSON fetch ───────── */
-  async function safeJson(url, retries = 3) {
+  async function safeJson (url, retries = 3) {
     for (let i = 0; i < retries; i++) {
       const res = await fetch(url, {
         headers: {
@@ -32,13 +36,14 @@ export default async (request) => {
       });
 
       const ct = res.headers.get('content-type') || '';
-      if (!ct.includes('application/json')) { await new Promise(r => setTimeout(r, 400)); continue; }
+      if (!ct.includes('application/json')) { await new Promise(r=>setTimeout(r,400)); continue; }
 
       let obj;
-      try { obj = await res.json(); } catch { await new Promise(r => setTimeout(r, 400)); continue; }
+      try { obj = await res.json(); }
+      catch { await new Promise(r=>setTimeout(r,400)); continue; }
 
-      if (obj && typeof obj.code === 'number' && obj.code < 0) { await new Promise(r => setTimeout(r, 400)); continue; }
-      return obj;            // ✅ good JSON
+      if (obj && typeof obj.code === 'number' && obj.code < 0) { await new Promise(r=>setTimeout(r,400)); continue; }
+      return obj;                     // ✅ success
     }
     throw new Error('invalid JSON after retries');
   }
@@ -49,20 +54,7 @@ export default async (request) => {
   const ema = (a,p)=>{if(a.length<p)return 0;const k=2/(p+1);let e=sma(a.slice(0,p),p);for(let i=p;i<a.length;i++)e=a[i]*k+e*(1-k);return e;};
   function rsi(a,p){if(a.length<p+1)return 0;let g=0,l=0;for(let i=1;i<=p;i++){const d=a[i]-a[i-1];d>=0?g+=d:l-=d;}let ag=g/p,al=l/p;
     for(let i=p+1;i<a.length;i++){const d=a[i]-a[i-1];ag=(ag*(p-1)+Math.max(d,0))/p;al=(al*(p-1)+Math.max(-d,0))/p;}return al===0?100:100-100/(1+ag/al);}
-  const atr = (h,l,c,p) => {
-    if (h.length < p + 1) return 0;
-    const trs = [];
-    for (let i = 1; i < h.length; i++) {
-      trs.push(
-        Math.max(
-          h[i] - l[i],
-          Math.abs(h[i] - c[i - 1]),
-          Math.abs(l[i] - c[i - 1])
-        )
-      );
-    }
-    return sma(trs.slice(-p), p);
-  };
+  const atr = (h,l,c,p)=>{if(h.length<p+1)return 0;const t=[];for(let i=1;i<h.length;i++){t.push(Math.max(h[i]-l[i],Math.abs(h[i]-c[i-1]),Math.abs(l[i]-c[i-1])));}return sma(t.slice(-p),p);};
 
   /* ───────── BLOC A – trend / volatility ───────── */
   for (const tf of ['15m','1h','4h','1d']) {
@@ -76,11 +68,11 @@ export default async (request) => {
             last = c.at(-1) || 1;
 
       result.dataA[tf] = {
-        ema50:+ema(c,50).toFixed(2),
-        ema200:+ema(c,200).toFixed(2),
-        rsi14:+rsi(c,14).toFixed(1),
-        bbPct:+((4*std(c,20)/last)*100).toFixed(2),
-        atrPct:+((atr(h,l,c,14)/last)*100).toFixed(2)
+        ema50:  +ema(c, 50 ).toFixed(2),
+        ema200: +ema(c, 200).toFixed(2),
+        rsi14:  +rsi(c, 14 ).toFixed(1),
+        bbPct:  +((4 * std(c, 20) / last) * 100).toFixed(2),
+        atrPct: +((atr(h, l, c, 14) / last) * 100).toFixed(2)
       };
     } catch (e) { result.errors.push(`A[${tf}]: ${e.message}`); }
   }
@@ -94,20 +86,20 @@ export default async (request) => {
       const closes = rows.map(r=>+r[4]);
       const pct    = ((closes.at(-1) - closes[0]) / closes[0]) * 100;
 
-      let note;
-      if      (pct >=  1.5) note = '🔼 strong up-move – breakout long / exit shorts';
-      else if (pct >=  0.5) note = '⬆ bullish drift – long bias';
-      else if (pct <= -1.5) note = '🔽 strong down-move – breakout short / exit longs';
-      else if (pct <= -0.5) note = '⬇ bearish drift – short bias';
+      let note = 'range';              // default
+      if      (pct >=  1.5) note = 'strong up-move – breakout long / exit shorts';
+      else if (pct >=  0.5) note = 'bullish drift – long bias';
+      else if (pct <= -1.5) note = 'strong down-move – breakout short / exit longs';
+      else if (pct <= -0.5) note = 'bearish drift – short bias';
       else                  note = closes.at(-1) > closes.at(-2)
-                                   ? '↗ range base – possible long reversal'
-                                   : '↘ range top – possible short reversal';
+                                   ? 'range base – possible long reversal'
+                                   : 'range top – possible short reversal';
 
       result.dataB[tf] = { pct:+pct.toFixed(2), note };
     }
-  } catch (e) { result.errors.push(`B: ${e.message}`); result.dataB={}; }
+  } catch (e) { result.errors.push(`B: ${e.message}`); result.dataB = {}; }
 
-  /* ───────── BLOC C – volume-flow ───────── */
+  /* ───────── BLOC C – volume flow ───────── */
   try {
     const rows = await safeJson(`https://api.binance.com/api/v3/klines?symbol=${SYMBOL}&interval=1m&limit=1500`);
     if (!Array.isArray(rows)) throw new Error('1m klines not array');
@@ -123,22 +115,22 @@ export default async (request) => {
         (+k[4] >= +k[1] ? bull : bear) += +k[5];
       }
       result.dataC[lbl] = {
-        bullVol:+bull.toFixed(2),
-        bearVol:+bear.toFixed(2),
-        totalVol:+(bull+bear).toFixed(2)
+        bullVol:  +bull.toFixed(2),
+        bearVol:  +bear.toFixed(2),
+        totalVol: +(bull + bear).toFixed(2)
       };
     }
     const tot24 = result.dataC['24h'].totalVol;
-    const base  = { '15m': tot24/96, '1h': tot24/24, '4h': tot24/6 };
+    const base  = { '15m':tot24/96, '1h':tot24/24, '4h':tot24/6 };
     result.dataC.relative = {};
     for (const lbl of ['15m','1h','4h']) {
       const r = result.dataC[lbl].totalVol / Math.max(base[lbl], 1);
-      result.dataC.relative[lbl] = r>2 ? 'very high'
-                               : r>1.2 ? 'high'
-                               : r<0.5 ? 'low'
-                               : 'normal';
+      result.dataC.relative[lbl] =
+        r > 2   ? 'very high' :
+        r > 1.2 ? 'high'     :
+        r < 0.5 ? 'low'      : 'normal';
     }
-  } catch (e) { result.errors.push(`C: ${e.message}`); result.dataC={}; }
+  } catch (e) { result.errors.push(`C: ${e.message}`); result.dataC = {}; }
 
   /* ───────── BLOC D – derivatives positioning ───────── */
   try {
@@ -155,13 +147,13 @@ export default async (request) => {
     if (typeof oiNow.openInterest !== 'string' || !oiHist[0]?.sumOpenInterest) throw new Error('OI shape');
 
     const pct24h = (((+oiNow.openInterest - +oiHist[0].sumOpenInterest) / +oiHist[0].sumOpenInterest) * 100).toFixed(1);
-    result.dataD = { fundingZ: z, oiDelta24h: pct24h };
+    result.dataD = { fundingZ:z, oiDelta24h:pct24h };
   } catch (e) { result.errors.push(`D: ${e.message}`); }
 
   /* ───────── BLOC E – sentiment ───────── */
   try {
-    const cg  = await fetch('https://api.coingecko.com/api/v3/coins/bitcoin').then(r=>r.json());
-    const up  = cg.sentiment_votes_up_percentage ?? cg.community_data?.sentiment_votes_up_percentage;
+    const cg = await fetch('https://api.coingecko.com/api/v3/coins/bitcoin').then(r=>r.json());
+    const up = cg.sentiment_votes_up_percentage ?? cg.community_data?.sentiment_votes_up_percentage;
     if (up == null) throw new Error('sentiment missing');
 
     const fg  = await fetch('https://api.alternative.me/fng/?limit=1').then(r=>r.json());
@@ -183,14 +175,13 @@ export default async (request) => {
     };
   } catch (e) { result.errors.push(`F: ${e.message}`); }
 
-  /* ───────── JSON response with CORS ───────── */
+  /* ───────── final JSON with CORS ───────── */
   return new Response(
     JSON.stringify({ ...result, timestamp: Date.now() }),
     {
       headers: {
-        'Content-Type':                'application/json',
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Headers':'Content-Type, Authorization'
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*'
       }
     }
   );
