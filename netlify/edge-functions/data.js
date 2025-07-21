@@ -1,5 +1,7 @@
 // netlify/edge-functions/data.js
 
+export const config = { path: ["/data", "/data.json"] };
+
 export default async function handler(request) {
   // CORS preflight
   if (request.method === "OPTIONS") {
