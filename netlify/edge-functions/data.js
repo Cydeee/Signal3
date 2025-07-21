@@ -1,48 +1,52 @@
 // netlify/edge-functions/data.js
 
-export const config = { path: ["/data", "/data.json"] };
+export const config = {
+  path: ["/data", "/data.json"],
+  cache: "manual",
+};
 
 export default async function handler(request) {
-  // CORS preflight
   if (request.method === "OPTIONS") {
     return new Response(null, {
       status: 204,
       headers: {
-        "Access-Control-Allow-Origin":  "*",
+        "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Methods": "GET, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type"
-      }
+        "Access-Control-Allow-Headers": "Content-Type",
+      },
     });
   }
 
-  const url = new URL(request.url);
-  const wantJson = url.pathname.endsWith("/data.json");
+  const wantJson = new URL(request.url).pathname.endsWith("/data.json");
 
   try {
-    const result = await buildDashboardData();
-    const payload = { ...result, timestamp: Date.now() };
-
-    const headers = {
-      "Access-Control-Allow-Origin": "*",
-      "Content-Type": wantJson
-        ? "application/json; charset=utf-8"
-        : "text/html; charset=utf-8"
-    };
+    const payload = await buildDashboardData();
+    payload.timestamp = Date.now();
 
     if (wantJson) {
-      return new Response(JSON.stringify(payload), { headers });
-    } else {
-      const html = `<!DOCTYPE html>
-<html><body>
-  <pre id="dashboard-data">${JSON.stringify(payload)}</pre>
-</body></html>`;
-      return new Response(html, { headers });
+      return new Response(JSON.stringify(payload), {
+        headers: {
+          "Content-Type": "application/json; charset=utf-8",
+          "Access-Control-Allow-Origin": "*",
+          "Cache-Control": "public, max-age=0, must-revalidate",
+          "CDN-Cache-Control": "public, s-maxage=60, must-revalidate",
+        },
+      });
     }
+
+    const html = `<!DOCTYPE html>
+<html><body><pre id="dashboard-data">${JSON.stringify(payload)}</pre></body></html>`;
+    return new Response(html, {
+      headers: {
+        "Content-Type": "text/html; charset=utf-8",
+        "Access-Control-Allow-Origin": "*",
+      },
+    });
   } catch (err) {
-    console.error("Edge FUNCTION ERROR:", err);
-    return new Response("<p>Service temporarily unavailable.</p>", {
+    console.error("Error in Edge Function:", err);
+    return new Response("Service temporarily unavailable.", {
       status: 500,
-      headers: { "Content-Type": "text/html; charset=utf-8" }
+      headers: { "Content-Type": "text/html; charset=utf-8" },
     });
   }
 }
