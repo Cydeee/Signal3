@@ -8,3 +8,8 @@
 [[edge_functions]]
   path     = "/data.html"
   function = "data-page"
+
+# Add this new route
+[[edge_functions]]
+  path     = "/data.json"
+  function = "data"
