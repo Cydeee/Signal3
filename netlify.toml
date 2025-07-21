@@ -1,15 +1,30 @@
 [build]
   publish = "."
 
+# Edge function serving both /data and /data.json
 [[edge_functions]]
   path     = "/data"
   function = "data"
 
 [[edge_functions]]
+  path     = "/data.json"
+  function = "data"
+
+# (If you have data-page, keep it)
+[[edge_functions]]
   path     = "/data.html"
   function = "data-page"
 
-# Add this new route
-[[edge_functions]]
-  path     = "/data.json"
-  function = "data"
+# Fallback rewrite for SPA — kept only if needed
+# Move this *after* explicit routes to avoid shadowing
+[[redirects]]
+  from   = "/data.json"
+  to     = "/data.json"
+  status = 200
+  force  = true
+
+# Optional catch-all: user SPA
+[[redirects]]
+  from   = "/*"
+  to     = "/index.html"
+  status = 200
